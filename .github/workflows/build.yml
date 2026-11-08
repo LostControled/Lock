@@ -1,0 +1,124 @@
+name: Build LockNow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Checkout TrollCuts source
+        run: |
+          git clone --depth 1 https://github.com/udevsharold/TrollCuts.git upstream
+
+      - name: Replace app entry point
+        run: |
+          cat > upstream/TrollCuts/TrollCutsApp.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+          import Darwin
+
+          @MainActor
+          final class LockNowAppDelegate: NSObject, UIApplicationDelegate {
+              private let rebootShortcut = "com.lostcontroled.locknow.reboot"
+
+              func application(
+                  _ application: UIApplication,
+                  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+              ) -> Bool {
+                  if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem,
+                     shortcut.type == rebootShortcut {
+                      rebootDevice()
+                  } else {
+                      lockDevice()
+                  }
+                  return true
+              }
+
+              func application(
+                  _ application: UIApplication,
+                  performActionFor shortcutItem: UIApplicationShortcutItem,
+                  completionHandler: @escaping (Bool) -> Void
+              ) {
+                  if shortcutItem.type == rebootShortcut {
+                      rebootDevice()
+                      completionHandler(true)
+                  } else {
+                      completionHandler(false)
+                  }
+              }
+
+              private func lockDevice() {
+                  let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
+                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
+                  MCProfileConnection.sharedConnection().lockDevice()
+                  dlclose(handle)
+              }
+
+              private func rebootDevice() {
+                  let path = "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices"
+                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
+                  FBSSystemService.sharedService().reboot()
+                  dlclose(handle)
+              }
+          }
+
+          @main
+          struct LockNowApp: App {
+              @UIApplicationDelegateAdaptor(LockNowAppDelegate.self) private var appDelegate
+
+              var body: some Scene {
+                  WindowGroup {
+                      Color.clear
+                          .ignoresSafeArea()
+                  }
+              }
+          }
+          SWIFT
+
+      - name: Build and package TrollStore app
+        run: |
+          set -euo pipefail
+          brew install ldid
+          xcodebuild \
+            -project upstream/TrollCuts.xcodeproj \
+            -scheme TrollCuts \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            PRODUCT_BUNDLE_IDENTIFIER=com.lostcontroled.locknow \
+            INFOPLIST_KEY_CFBundleDisplayName="一键锁屏" \
+            build
+
+          APP="build/DerivedData/Build/Products/Release-iphoneos/TrollCuts.app"
+          test -d "$APP"
+
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems array" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0 dict" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemType string com.lostcontroled.locknow.reboot" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemTitle string 重启设备" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemSubtitle string 立即重新启动 iPad" "$APP/Info.plist"
+
+          codesign --remove "$APP" || true
+          rm -rf "$APP/_CodeSignature" "$APP/embedded.mobileprovision"
+          ldid -Sentitlements.plist "$APP/TrollCuts"
+
+          rm -rf Payload LockNow.tipa
+          mkdir Payload
+          cp -R "$APP" Payload/LockNow.app
+          /usr/bin/zip -qry LockNow.tipa Payload
+          test -s LockNow.tipa
+
+      - name: Upload .tipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LockNow-tipa
+          path: LockNow.tipa
+          if-no-files-found: error
