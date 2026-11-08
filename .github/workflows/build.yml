@@ -56,9 +56,17 @@ jobs:
 
               private func lockDevice() {
                   let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
-                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
-                  MCProfileConnection.shared().lockDevice()
+                  guard let handle = dlopen(path, RTLD_LAZY) else {
+                      exit(1)
+                  }
+
+                  // Request an immediate lock, rather than the deferred lock used previously.
+                  MCProfileConnection.shared().lockDeviceImmediately(true)
                   dlclose(handle)
+
+                  // This is a one-shot launcher. Exit so the next icon tap starts a fresh process
+                  // instead of reopening the previous empty SwiftUI window.
+                  exit(0)
               }
 
               private func rebootDevice() {
