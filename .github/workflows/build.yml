@@ -146,18 +146,18 @@ jobs:
           }
 
           final class LockNowController: UIViewController {
-              private var didRun = false
+              // Keep this process-wide: viewDidAppear may run again when the app
+              // returns from the app switcher or reconnects its scene.
+              private static var lockActionStarted = false
 
               override func viewDidAppear(_ animated: Bool) {
                   super.viewDidAppear(animated)
-                  guard !didRun else { return }
-                  didRun = true
-
+                  guard !Self.lockActionStarted else { return }
+                  guard !LockNowAppDelegate.launchedForShortcut else { return }
                   guard let scene = view.window?.windowScene else { return }
 
-                  if !LockNowAppDelegate.launchedForShortcut {
-                      LockNowAppDelegate.lockAndDismiss(scene)
-                  }
+                  Self.lockActionStarted = true
+                  LockNowAppDelegate.lockAndDismiss(scene)
               }
           }
 
