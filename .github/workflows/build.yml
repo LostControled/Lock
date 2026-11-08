@@ -23,20 +23,31 @@ jobs:
           import SwiftUI
           import UIKit
           import Darwin
+          import ObjectiveC.runtime
 
           @MainActor
           final class LockNowAppDelegate: NSObject, UIApplicationDelegate {
               static var launchedForReboot = false
+              static var launchedForShortcut = false
+              static var pendingAction: String?
+
               private let rebootShortcut = "com.lostcontroled.locknow.reboot"
+              private let bksShortcut = "com.lostcontroled.locknow.test.bks"
+              private let sbShortcut = "com.lostcontroled.locknow.test.sb"
+              private let caShortcut = "com.lostcontroled.locknow.test.ca"
 
               func application(
                   _ application: UIApplication,
                   didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
               ) -> Bool {
-                  if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem,
-                     shortcut.type == rebootShortcut {
-                      Self.launchedForReboot = true
-                      rebootDevice()
+                  if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+                      Self.launchedForShortcut = true
+                      if shortcut.type == rebootShortcut {
+                          Self.launchedForReboot = true
+                          rebootDevice()
+                      } else if [bksShortcut, sbShortcut, caShortcut].contains(shortcut.type) {
+                          Self.pendingAction = shortcut.type
+                      }
                   }
                   return true
               }
@@ -46,25 +57,173 @@ jobs:
                   performActionFor shortcutItem: UIApplicationShortcutItem,
                   completionHandler: @escaping (Bool) -> Void
               ) {
+                  Self.launchedForShortcut = true
+
                   if shortcutItem.type == rebootShortcut {
+                      Self.launchedForReboot = true
                       rebootDevice()
                       completionHandler(true)
-                  } else {
-                      completionHandler(false)
+                      return
                   }
+
+                  if [bksShortcut, sbShortcut, caShortcut].contains(shortcutItem.type) {
+                      Self.pendingAction = shortcutItem.type
+                      if let scene = UIApplication.shared.connectedScenes
+                          .compactMap({ $0 as? UIWindowScene })
+                          .first(where: { $0.activationState == .foregroundActive }) {
+                          Self.runPendingAction(in: scene)
+                      }
+                      completionHandler(true)
+                      return
+                  }
+
+                  completionHandler(false)
+              }
+
+              static func lockDevice() {
+                  let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
+                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
+                  MCProfileConnection.shared().lockDeviceImmediately(true)
+                  dlclose(handle)
               }
 
               static func lockAndDismiss(_ scene: UIWindowScene) {
+                  lockDevice()
                   UIApplication.shared.requestSceneSessionDestruction(
                       scene.session,
                       options: nil,
                       errorHandler: nil
                   )
+              }
 
-                  let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
-                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
-                  MCProfileConnection.shared().lockDeviceImmediately(true)
-                  dlclose(handle)
+              static func runPendingAction(in scene: UIWindowScene) {
+                  guard let action = pendingAction else { return }
+                  pendingAction = nil
+
+                  // First request a real device lock, then test the selected
+                  // display API independently.
+                  lockDevice()
+
+                  switch action {
+                  case "com.lostcontroled.locknow.test.bks":
+                      testBackBoardBlanking()
+                  case "com.lostcontroled.locknow.test.sb":
+                      testSpringBoardBacklight()
+                  case "com.lostcontroled.locknow.test.ca":
+                      testCoreAnimationBlanking()
+                  default:
+                      break
+                  }
+
+                  UIApplication.shared.requestSceneSessionDestruction(
+                      scene.session,
+                      options: nil,
+                      errorHandler: nil
+                  )
+              }
+
+              private static func testBackBoardBlanking() {
+                  let path = "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices"
+                  guard let handle = dlopen(path, RTLD_NOW) else {
+                      NSLog("[LockNow] BackBoardServices load failed: %s", dlerror())
+                      return
+                  }
+                  defer { dlclose(handle) }
+
+                  guard let symbol = dlsym(handle, "BKSDisplayServicesSetScreenBlanked") else {
+                      NSLog("[LockNow] BKSDisplayServicesSetScreenBlanked not found")
+                      return
+                  }
+
+                  typealias BlankFunction = @convention(c) (Int32) -> Void
+                  let blank = unsafeBitCast(symbol, to: BlankFunction.self)
+                  blank(1)
+                  NSLog("[LockNow] BKSDisplayServicesSetScreenBlanked(1) called")
+              }
+
+              private static func testSpringBoardBacklight() {
+                  // This class normally belongs to the SpringBoard process.
+                  // Loading it in an ordinary app may fail or have no system effect.
+                  let path = "/System/Library/PrivateFrameworks/SpringBoard.framework/SpringBoard"
+                  guard let handle = dlopen(path, RTLD_LAZY) else {
+                      NSLog("[LockNow] SpringBoard framework unavailable: %s", dlerror())
+                      return
+                  }
+                  defer { dlclose(handle) }
+
+                  guard let cls = NSClassFromString("SBBacklightController") else {
+                      NSLog("[LockNow] SBBacklightController class not found in app process")
+                      return
+                  }
+
+                  let sharedSelector = NSSelectorFromString("sharedInstance")
+                  guard let sharedMethod = class_getClassMethod(cls, sharedSelector) else {
+                      NSLog("[LockNow] SBBacklightController.sharedInstance not found")
+                      return
+                  }
+
+                  typealias SharedFunction = @convention(c) (AnyObject, Selector) -> Unmanaged<AnyObject>?
+                  let getShared = unsafeBitCast(method_getImplementation(sharedMethod), to: SharedFunction.self)
+                  guard let controller = getShared(cls as AnyObject, sharedSelector)?.takeUnretainedValue() else {
+                      NSLog("[LockNow] SBBacklightController instance unavailable")
+                      return
+                  }
+
+                  let selector = NSSelectorFromString("setBacklightFactor:source:")
+                  guard let method = class_getInstanceMethod(cls, selector) else {
+                      NSLog("[LockNow] setBacklightFactor:source: not found")
+                      return
+                  }
+
+                  typealias SetFactorFunction = @convention(c) (AnyObject, Selector, Float, Int) -> Void
+                  let setFactor = unsafeBitCast(method_getImplementation(method), to: SetFactorFunction.self)
+                  setFactor(controller, selector, 0.0, 0)
+                  NSLog("[LockNow] SBBacklightController setBacklightFactor:0 source:0 called")
+              }
+
+              private static func testCoreAnimationBlanking() {
+                  guard let cls = NSClassFromString("CAWindowServer") else {
+                      NSLog("[LockNow] CAWindowServer class not found")
+                      return
+                  }
+
+                  let serverSelector = NSSelectorFromString("server")
+                  guard let serverMethod = class_getClassMethod(cls, serverSelector) else {
+                      NSLog("[LockNow] CAWindowServer.server not found")
+                      return
+                  }
+
+                  typealias ServerFunction = @convention(c) (AnyObject, Selector) -> Unmanaged<AnyObject>?
+                  let getServer = unsafeBitCast(method_getImplementation(serverMethod), to: ServerFunction.self)
+                  guard let server = getServer(cls as AnyObject, serverSelector)?.takeUnretainedValue() else {
+                      NSLog("[LockNow] CAWindowServer instance unavailable")
+                      return
+                  }
+
+                  let displaySelector = NSSelectorFromString("displayWithDisplayId:")
+                  guard let displayMethod = class_getInstanceMethod(cls, displaySelector) else {
+                      NSLog("[LockNow] displayWithDisplayId: not found")
+                      return
+                  }
+
+                  typealias DisplayFunction = @convention(c) (AnyObject, Selector, UInt32) -> Unmanaged<AnyObject>?
+                  let getDisplay = unsafeBitCast(method_getImplementation(displayMethod), to: DisplayFunction.self)
+                  guard let display = getDisplay(server, displaySelector, 1)?.takeUnretainedValue() else {
+                      NSLog("[LockNow] main display unavailable")
+                      return
+                  }
+
+                  let blankSelector = NSSelectorFromString("setBlanked:")
+                  guard let blankMethod = class_getInstanceMethod(object_getClass(display), blankSelector)
+                      ?? class_getInstanceMethod(type(of: display), blankSelector) else {
+                      NSLog("[LockNow] setBlanked: not found")
+                      return
+                  }
+
+                  typealias BlankDisplayFunction = @convention(c) (AnyObject, Selector, Int8) -> Void
+                  let blankDisplay = unsafeBitCast(method_getImplementation(blankMethod), to: BlankDisplayFunction.self)
+                  blankDisplay(display, blankSelector, 1)
+                  NSLog("[LockNow] CAWindowServer display setBlanked:1 called")
               }
 
               private func rebootDevice() {
@@ -83,10 +242,13 @@ jobs:
                   guard !didRun else { return }
                   didRun = true
 
-                  guard !LockNowAppDelegate.launchedForReboot,
-                        let scene = view.window?.windowScene else { return }
+                  guard let scene = view.window?.windowScene else { return }
 
-                  LockNowAppDelegate.lockAndDismiss(scene)
+                  if LockNowAppDelegate.launchedForShortcut {
+                      LockNowAppDelegate.runPendingAction(in: scene)
+                  } else if !LockNowAppDelegate.launchedForReboot {
+                      LockNowAppDelegate.lockAndDismiss(scene)
+                  }
               }
           }
 
@@ -130,10 +292,26 @@ jobs:
           test -d "$APP"
 
           /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems array" "$APP/Info.plist"
+
           /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0 dict" "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemType string com.lostcontroled.locknow.reboot" "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemTitle string 重启设备" "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemSubtitle string 立即重新启动 iPad" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemType string com.lostcontroled.locknow.test.bks" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemTitle string 测试1：BackBoard熄屏" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:0:UIApplicationShortcutItemSubtitle string BKSDisplayServicesSetScreenBlanked" "$APP/Info.plist"
+
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:1 dict" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:1:UIApplicationShortcutItemType string com.lostcontroled.locknow.test.sb" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:1:UIApplicationShortcutItemTitle string 测试2：SpringBoard背光" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:1:UIApplicationShortcutItemSubtitle string SBBacklightController" "$APP/Info.plist"
+
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:2 dict" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:2:UIApplicationShortcutItemType string com.lostcontroled.locknow.test.ca" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:2:UIApplicationShortcutItemTitle string 测试3：CoreAnimation熄屏" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:2:UIApplicationShortcutItemSubtitle string CAWindowServer setBlanked" "$APP/Info.plist"
+
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:3 dict" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:3:UIApplicationShortcutItemType string com.lostcontroled.locknow.reboot" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:3:UIApplicationShortcutItemTitle string 重启设备" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems:3:UIApplicationShortcutItemSubtitle string 立即重新启动 iPad" "$APP/Info.plist"
 
           codesign --remove "$APP" || true
           rm -rf "$APP/_CodeSignature" "$APP/embedded.mobileprovision"
