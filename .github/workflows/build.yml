@@ -87,11 +87,7 @@ jobs:
                           scene.session,
                           options: nil
                       ) { error in
-                          if let error = error {
-                              NSLog("[LockNow] scene destruction failed: %@", error.localizedDescription)
-                          } else {
-                              NSLog("[LockNow] scene destroyed")
-                          }
+                          NSLog("[LockNow] scene destruction failed: %@", error.localizedDescription)
                       }
                   }
               }
