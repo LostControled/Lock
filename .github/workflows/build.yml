@@ -64,12 +64,24 @@ jobs:
               }
 
               static func dismissAfterLock(_ scene: UIWindowScene) {
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                      UIApplication.shared.requestSceneSessionDestruction(
-                          scene.session,
-                          options: nil,
-                          errorHandler: nil
-                      )
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                      if UIDevice.current.userInterfaceIdiom == .phone {
+                          // On iPhone, destroying the only scene can leave a stale blank
+                          // card. Terminate the app process instead; this does not promise
+                          // removal of the SpringBoard app-switcher card.
+                          let selector = NSSelectorFromString("terminateWithSuccess")
+                          if UIApplication.shared.responds(to: selector) {
+                              UIApplication.shared.perform(selector)
+                          } else {
+                              NSLog("[LockNow] terminateWithSuccess unavailable")
+                          }
+                      } else {
+                          UIApplication.shared.requestSceneSessionDestruction(
+                              scene.session,
+                              options: nil,
+                              errorHandler: nil
+                          )
+                      }
                   }
               }
 
