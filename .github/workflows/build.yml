@@ -57,14 +57,14 @@ jobs:
               private func lockDevice() {
                   let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
                   guard let handle = dlopen(path, RTLD_LAZY) else { return }
-                  MCProfileConnection.sharedConnection().lockDevice()
+                  MCProfileConnection.shared().lockDevice()
                   dlclose(handle)
               }
 
               private func rebootDevice() {
                   let path = "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices"
                   guard let handle = dlopen(path, RTLD_LAZY) else { return }
-                  FBSSystemService.sharedService().reboot()
+                  FBSSystemService.shared().reboot()
                   dlclose(handle)
               }
           }
