@@ -73,28 +73,25 @@ jobs:
               static func lockDevice() {
                   let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
                   guard let handle = dlopen(path, RTLD_LAZY) else { return }
-                  MCProfileConnection.shared().lockDeviceImmediately(true)
+                  // Use the same lock call as the upstream TrollCuts Lock intent.
+              MCProfileConnection.shared().lockDevice()
                   dlclose(handle)
               }
 
               static func dismissAfterLock(_ scene: UIWindowScene) {
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                      if UIDevice.current.userInterfaceIdiom == .phone {
-                          // On iPhone, destroying the only scene can leave a stale blank
-                          // card. Terminate the app process instead; this does not promise
-                          // removal of the SpringBoard app-switcher card.
-                          let selector = NSSelectorFromString("terminateWithSuccess")
-                          if UIApplication.shared.responds(to: selector) {
-                              UIApplication.shared.perform(selector)
+                  // This UIKit API explicitly removes the scene from the app switcher.
+                  // Do not terminate the process separately: doing so can leave a stale
+                  // snapshot that relaunches into the lock action again.
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                      UIApplication.shared.requestSceneSessionDestruction(
+                          scene.session,
+                          options: nil
+                      ) { error in
+                          if let error = error {
+                              NSLog("[LockNow] scene destruction failed: %@", error.localizedDescription)
                           } else {
-                              NSLog("[LockNow] terminateWithSuccess unavailable")
+                              NSLog("[LockNow] scene destroyed")
                           }
-                      } else {
-                          UIApplication.shared.requestSceneSessionDestruction(
-                              scene.session,
-                              options: nil,
-                              errorHandler: nil
-                          )
                       }
                   }
               }
@@ -226,7 +223,7 @@ jobs:
           APP="build/DerivedData/Build/Products/Release-iphoneos/TrollCuts.app"
           test -d "$APP"
 
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.2" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.2" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.3" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.3" "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${GITHUB_RUN_NUMBER}" "$APP/Info.plist"
 
           /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems array" "$APP/Info.plist"
