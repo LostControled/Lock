@@ -26,7 +26,8 @@ jobs:
           import ObjectiveC.runtime
 
           @MainActor
-          final class LockNowAppDelegate: NSObject, UIApplicationDelegate {
+          @UIApplicationMain
+          final class LockNowAppDelegate: UIResponder, UIApplicationDelegate {
               static var launchedForShortcut = false
               private let rebootShortcut = "com.lostcontroled.locknow.reboot"
 
@@ -40,6 +41,19 @@ jobs:
                       rebootDevice()
                   }
                   return true
+              }
+
+              func application(
+                  _ application: UIApplication,
+                  configurationForConnecting connectingSceneSession: UISceneSession,
+                  options: UIScene.ConnectionOptions
+              ) -> UISceneConfiguration {
+                  let configuration = UISceneConfiguration(
+                      name: nil,
+                      sessionRole: connectingSceneSession.role
+                  )
+                  configuration.delegateClass = LockNowSceneDelegate.self
+                  return configuration
               }
 
               func application(
@@ -90,7 +104,7 @@ jobs:
                   dismissAfterLock(scene)
               }
 
-              private func rebootDevice() {
+              static func rebootDevice() {
                   let frameworkPath = "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices"
                   guard let handle = dlopen(frameworkPath, RTLD_NOW) else {
                       NSLog("[LockNow] FrontBoardServices load failed")
@@ -155,15 +169,41 @@ jobs:
               func updateUIViewController(_ controller: LockNowController, context: Context) {}
           }
 
-          @main
-          struct LockNowApp: App {
-              @UIApplicationDelegateAdaptor(LockNowAppDelegate.self) private var appDelegate
+          final class LockNowSceneDelegate: UIResponder, UIWindowSceneDelegate {
+              var window: UIWindow?
 
-              var body: some Scene {
-                  WindowGroup {
-                      LockNowLauncher()
-                          .ignoresSafeArea()
+              func scene(
+                  _ scene: UIScene,
+                  willConnectTo session: UISceneSession,
+                  options connectionOptions: UIScene.ConnectionOptions
+              ) {
+                  guard let windowScene = scene as? UIWindowScene else { return }
+
+                  if connectionOptions.shortcutItem?.type == "com.lostcontroled.locknow.reboot" {
+                      LockNowAppDelegate.launchedForShortcut = true
+                      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                          LockNowAppDelegate.rebootDevice()
+                      }
                   }
+
+                  let window = UIWindow(windowScene: windowScene)
+                  window.rootViewController = UIHostingController(rootView: LockNowLauncher().ignoresSafeArea())
+                  self.window = window
+                  window.makeKeyAndVisible()
+              }
+
+              func windowScene(
+                  _ windowScene: UIWindowScene,
+                  performActionFor shortcutItem: UIApplicationShortcutItem,
+                  completionHandler: @escaping (Bool) -> Void
+              ) {
+                  guard shortcutItem.type == "com.lostcontroled.locknow.reboot" else {
+                      completionHandler(false)
+                      return
+                  }
+                  LockNowAppDelegate.launchedForShortcut = true
+                  LockNowAppDelegate.rebootDevice()
+                  completionHandler(true)
               }
           }
           SWIFT
