@@ -68,23 +68,14 @@ jobs:
 
               static func dismissAfterLock(_ scene: UIWindowScene) {
                   DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                      if UIDevice.current.userInterfaceIdiom == .phone {
-                          // On iPhone, destroying the only scene can leave a stale blank
-                          // card. Terminate the app process instead; this does not promise
-                          // removal of the SpringBoard app-switcher card.
-                          let selector = NSSelectorFromString("terminateWithSuccess")
-                          if UIApplication.shared.responds(to: selector) {
-                              UIApplication.shared.perform(selector)
-                          } else {
-                              NSLog("[LockNow] terminateWithSuccess unavailable")
-                          }
-                      } else {
-                          UIApplication.shared.requestSceneSessionDestruction(
-                              scene.session,
-                              options: nil,
-                              errorHandler: nil
-                          )
-                      }
+                      // Ask UIKit to permanently dismiss this scene and remove its
+                      // app-switcher card. Keep the existing SwiftUI lifecycle; do not
+                      // install a custom SceneDelegate (which previously caused a blank UI).
+                      UIApplication.shared.requestSceneSessionDestruction(
+                          scene.session,
+                          options: nil,
+                          errorHandler: nil
+                      )
                   }
               }
 
@@ -189,7 +180,7 @@ jobs:
           APP="build/DerivedData/Build/Products/Release-iphoneos/TrollCuts.app"
           test -d "$APP"
 
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.4" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.4" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.5" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.5" "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${GITHUB_RUN_NUMBER}" "$APP/Info.plist"
 
           /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems array" "$APP/Info.plist"
