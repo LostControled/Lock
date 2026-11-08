@@ -335,7 +335,7 @@ jobs:
 
           cat > RebootRootHelper.c <<'C'
           #include <unistd.h>
-          #include <sys/reboot.h>
+          extern int reboot(int);
           int main(void) {
               reboot(0);
               return 1;
