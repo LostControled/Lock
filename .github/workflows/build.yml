@@ -38,7 +38,7 @@ jobs:
                   if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem,
                      shortcut.type == rebootShortcut {
                       Self.launchedForShortcut = true
-                      rebootDevice()
+                      Self.rebootDevice()
                   }
                   return true
               }
@@ -66,7 +66,7 @@ jobs:
                       return
                   }
                   Self.launchedForShortcut = true
-                  rebootDevice()
+                  Self.rebootDevice()
                   completionHandler(true)
               }
 
