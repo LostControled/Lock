@@ -26,6 +26,7 @@ jobs:
 
           @MainActor
           final class LockNowAppDelegate: NSObject, UIApplicationDelegate {
+              static var launchedForReboot = false
               private let rebootShortcut = "com.lostcontroled.locknow.reboot"
 
               func application(
@@ -34,9 +35,8 @@ jobs:
               ) -> Bool {
                   if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem,
                      shortcut.type == rebootShortcut {
+                      Self.launchedForReboot = true
                       rebootDevice()
-                  } else {
-                      lockDevice()
                   }
                   return true
               }
@@ -54,19 +54,17 @@ jobs:
                   }
               }
 
-              private func lockDevice() {
-                  let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
-                  guard let handle = dlopen(path, RTLD_LAZY) else {
-                      exit(1)
-                  }
+              static func lockAndDismiss(_ scene: UIWindowScene) {
+                  UIApplication.shared.requestSceneSessionDestruction(
+                      scene.session,
+                      options: nil,
+                      errorHandler: nil
+                  )
 
-                  // Request an immediate lock, rather than the deferred lock used previously.
+                  let path = "/System/Library/PrivateFrameworks/ManagedConfiguration.framework/ManagedConfiguration"
+                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
                   MCProfileConnection.shared().lockDeviceImmediately(true)
                   dlclose(handle)
-
-                  // This is a one-shot launcher. Exit so the next icon tap starts a fresh process
-                  // instead of reopening the previous empty SwiftUI window.
-                  exit(0)
               }
 
               private func rebootDevice() {
@@ -77,13 +75,36 @@ jobs:
               }
           }
 
+          final class LockNowController: UIViewController {
+              private var didRun = false
+
+              override func viewDidAppear(_ animated: Bool) {
+                  super.viewDidAppear(animated)
+                  guard !didRun else { return }
+                  didRun = true
+
+                  guard !LockNowAppDelegate.launchedForReboot,
+                        let scene = view.window?.windowScene else { return }
+
+                  LockNowAppDelegate.lockAndDismiss(scene)
+              }
+          }
+
+          struct LockNowLauncher: UIViewControllerRepresentable {
+              func makeUIViewController(context: Context) -> LockNowController {
+                  LockNowController()
+              }
+
+              func updateUIViewController(_ controller: LockNowController, context: Context) {}
+          }
+
           @main
           struct LockNowApp: App {
               @UIApplicationDelegateAdaptor(LockNowAppDelegate.self) private var appDelegate
 
               var body: some Scene {
                   WindowGroup {
-                      Color.clear
+                      LockNowLauncher()
                           .ignoresSafeArea()
                   }
               }
