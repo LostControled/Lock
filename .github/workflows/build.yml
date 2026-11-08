@@ -87,13 +87,20 @@ jobs:
                   dlclose(handle)
               }
 
+              static func dismissAfterLock(_ scene: UIWindowScene) {
+                  // Let the lock animation finish before destroying the app scene.
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                      UIApplication.shared.requestSceneSessionDestruction(
+                          scene.session,
+                          options: nil,
+                          errorHandler: nil
+                      )
+                  }
+              }
+
               static func lockAndDismiss(_ scene: UIWindowScene) {
                   lockDevice()
-                  UIApplication.shared.requestSceneSessionDestruction(
-                      scene.session,
-                      options: nil,
-                      errorHandler: nil
-                  )
+                  dismissAfterLock(scene)
               }
 
               static func runPendingAction(in scene: UIWindowScene) {
@@ -115,11 +122,7 @@ jobs:
                       break
                   }
 
-                  UIApplication.shared.requestSceneSessionDestruction(
-                      scene.session,
-                      options: nil,
-                      errorHandler: nil
-                  )
+                  dismissAfterLock(scene)
               }
 
               private static func testBackBoardBlanking() {
@@ -226,10 +229,21 @@ jobs:
               }
 
               private func rebootDevice() {
-                  let path = "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices"
-                  guard let handle = dlopen(path, RTLD_LAZY) else { return }
-                  FBSSystemService.shared().reboot()
-                  dlclose(handle)
+                  guard
+                      let helperPath = Bundle.main.path(forResource: "RebootRootHelper", ofType: nil),
+                      let launcherPath = Bundle.main.path(forResource: "libRebootLauncher", ofType: "dylib"),
+                      let handle = dlopen(launcherPath, RTLD_NOW),
+                      let symbol = dlsym(handle, "launchRebootHelper")
+                  else {
+                      NSLog("[LockNow] reboot helper or launcher unavailable")
+                      return
+                  }
+                  defer { dlclose(handle) }
+
+                  typealias LaunchFunction = @convention(c) (UnsafePointer<CChar>) -> Int32
+                  let launch = unsafeBitCast(symbol, to: LaunchFunction.self)
+                  let result = helperPath.withCString { launch($0) }
+                  NSLog("[LockNow] reboot helper launch result: %d", result)
               }
           }
 
@@ -289,6 +303,51 @@ jobs:
 
           APP="build/DerivedData/Build/Products/Release-iphoneos/TrollCuts.app"
           test -d "$APP"
+
+          # Build a root-persona launcher and a tiny helper that invokes reboot(0).
+          cat > RebootLauncher.c <<'C'
+          #include <spawn.h>
+          #include <sys/types.h>
+          #include <stdlib.h>
+
+          extern char **environ;
+          extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict, uid_t, uint32_t);
+          extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *__restrict, uid_t);
+          extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *__restrict, uid_t);
+
+          int launchRebootHelper(const char *path) {
+              posix_spawnattr_t attr;
+              int result = posix_spawnattr_init(&attr);
+              if (result != 0) return result;
+
+              posix_spawnattr_set_persona_np(&attr, 99, 1);
+              posix_spawnattr_set_persona_uid_np(&attr, 0);
+              posix_spawnattr_set_persona_gid_np(&attr, 0);
+
+              char *const argv[] = {(char *)path, NULL};
+              pid_t pid = 0;
+              result = posix_spawn(&pid, path, NULL, &attr, argv, environ);
+              posix_spawnattr_destroy(&attr);
+              return result;
+          }
+          C
+
+          cat > RebootRootHelper.c <<'C'
+          #include <unistd.h>
+          int main(void) {
+              reboot(0);
+              return 1;
+          }
+          C
+
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
+            -dynamiclib RebootLauncher.c -o "$APP/libRebootLauncher.dylib"
+          xcrun --sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
+            RebootRootHelper.c -o "$APP/RebootRootHelper"
+          chmod 755 "$APP/RebootRootHelper"
+          ldid -Supstream/entitlements.plist "$APP/libRebootLauncher.dylib"
+          ldid -Supstream/entitlements.plist "$APP/RebootRootHelper"
 
           /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems array" "$APP/Info.plist"
 
