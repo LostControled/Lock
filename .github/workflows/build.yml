@@ -409,10 +409,30 @@ jobs:
           xcrun --sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
             DisplayOffHelper.c -o "$APP/DisplayOffHelper"
           chmod 755 "$APP/RebootRootHelper" "$APP/DisplayOffHelper"
-          /usr/libexec/PlistBuddy -c "Add :com.apple.backboard.client bool true" upstream/entitlements.plist
+          # Match RebootTools' dedicated helper entitlements instead of
+          # copying the full app entitlement set onto the root helper.
+          cat > RebootRootHelper.entitlements <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>platform-application</key><true/>
+            <key>com.apple.private.security.container-required</key><false/>
+          </dict></plist>
+          PLIST
+
+          cat > DisplayOffHelper.entitlements <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>platform-application</key><true/>
+            <key>com.apple.private.security.container-required</key><false/>
+            <key>com.apple.backboard.client</key><true/>
+          </dict></plist>
+          PLIST
+
           ldid -Supstream/entitlements.plist "$APP/libRebootLauncher.dylib"
-          ldid -Supstream/entitlements.plist "$APP/RebootRootHelper"
-          ldid -Supstream/entitlements.plist "$APP/DisplayOffHelper"
+          ldid -SRebootRootHelper.entitlements "$APP/RebootRootHelper"
+          ldid -SDisplayOffHelper.entitlements "$APP/DisplayOffHelper"
 
           /usr/libexec/PlistBuddy -c "Add :UIApplicationShortcutItems array" "$APP/Info.plist"
 
