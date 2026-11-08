@@ -108,7 +108,7 @@ jobs:
 
           codesign --remove "$APP" || true
           rm -rf "$APP/_CodeSignature" "$APP/embedded.mobileprovision"
-          ldid -Sentitlements.plist "$APP/TrollCuts"
+          ldid -Supstream/entitlements.plist "$APP/TrollCuts"
 
           rm -rf Payload LockNow.tipa
           mkdir Payload
